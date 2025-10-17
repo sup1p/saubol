@@ -71,9 +71,11 @@ class TranscriptionAgentManager:
             
             task = asyncio.create_task(run_worker())
             
-            # Store the task
+            # Store the task and context reference
             active_agents[room_name] = {
-                'task': task
+                'task': task,
+                'room_context': None,  # Will be set when the agent connects
+                'stop_event': asyncio.Event()  # Event to signal agent to stop
             }
             
             logger.info(f"Started transcription worker for room: {room_name}")
@@ -101,13 +103,25 @@ class TranscriptionAgentManager:
         try:
             agent_info = active_agents[room_name]
             task = agent_info['task']
+            stop_event = agent_info['stop_event']
             
-            # Stop the agent by canceling the task
+            # Signal the agent to stop
+            logger.info(f"Signalling agent to stop for room: {room_name}")
+            stop_event.set()
+            
+            # Wait a moment for the agent to process the stop signal
+            await asyncio.sleep(0.1)
+            
+            # Cancel the worker task
+            logger.info(f"Cancelling transcription task for room: {room_name}")
             task.cancel()
+            
             try:
                 await task
             except asyncio.CancelledError:
-                pass
+                logger.info(f"Task cancelled successfully for room: {room_name}")
+            except Exception as e:
+                logger.error(f"Error while stopping task for room {room_name}: {e}")
             
             # Remove from active agents
             if room_name in active_agents:
@@ -146,6 +160,10 @@ def create_entrypoint(target_room: str):
             return
         
         logger.info(f"Agent starting transcription for room: {target_room}")
+        
+        # Store the context in active_agents for shutdown capability
+        if target_room in active_agents:
+            active_agents[target_room]['room_context'] = ctx
         
         # Create transcription agent instance
         agent = TranscriptionAgent()
@@ -241,11 +259,17 @@ class TranscriptionAgent:
                     return_exceptions=True
                 )
                 
+            except asyncio.CancelledError:
+                logger.info(f"Transcription cancelled for {participant.identity}")
+                raise
             except Exception as e:
                 logger.error(f"Transcription error for {participant.identity}: {e}")
             finally:
-                # Close the STT stream
-                await stt_stream.aclose()
+                # Close the STT stream properly
+                try:
+                    await stt_stream.aclose()
+                except Exception as e:
+                    logger.debug(f"Error closing STT stream for {participant.identity}: {e}")
         
         # Handle track subscriptions
         @room.on("track_subscribed")
@@ -312,15 +336,48 @@ class TranscriptionAgent:
         
         # Keep the agent running
         logger.info("Transcription agent is ready and waiting for audio...")
+        
+        # Get stop event for this room
+        stop_event = None
+        room_name = room.name
+        if room_name in active_agents:
+            stop_event = active_agents[room_name]['stop_event']
+        
         try:
-            # Wait indefinitely until cancelled
-            await asyncio.Event().wait()
+            if stop_event:
+                # Wait for either cancellation or stop signal
+                await stop_event.wait()
+                logger.info(f"Stop signal received for room: {room_name}")
+            else:
+                # Fallback to indefinite wait if no stop event
+                await asyncio.Event().wait()
         except asyncio.CancelledError:
             logger.info("Transcription agent cancelled, cleaning up...")
-            # Cancel all transcription tasks
-            for task in transcription_tasks.values():
-                task.cancel()
             raise
+        finally:
+            # Cleanup transcription tasks
+            for task in transcription_tasks.values():
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for tasks to finish cancellation
+            if transcription_tasks:
+                try:
+                    await asyncio.gather(*transcription_tasks.values(), return_exceptions=True)
+                except Exception as e:
+                    logger.error(f"Error waiting for tasks to cancel: {e}")
+            
+            # Perform proper shutdown
+            try:
+                logger.info(f"Performing shutdown for room: {room_name}")
+                await ctx.shutdown()
+            except Exception as e:
+                logger.error(f"Error during shutdown: {e}")
+            
+            # Remove from active agents registry
+            if room_name in active_agents:
+                del active_agents[room_name]
+                logger.info(f"Removed agent for room {room_name} from active registry")
 
 
 # Default entrypoint for running the agent standalone
