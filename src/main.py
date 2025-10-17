@@ -1,0 +1,72 @@
+"""
+Real-time Speech-to-Text API using FastAPI, LiveKit, and Whisper
+
+This is the main application entry point that initializes the FastAPI application
+and includes all the routers for different endpoints.
+"""
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.core.settings import settings
+from src.core.dependencies import active_sessions
+from src.routers import rooms, transcription
+from src.schemas.livekit import ApiInfoResponse, HealthResponse
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan manager.
+    Handles startup and shutdown events.
+    """
+    # Startup
+    yield
+    
+    # Shutdown - cleanup all active transcription sessions
+    print("Shutting down, cleaning up sessions...")
+    for session in active_sessions.values():
+        await session.disconnect()
+
+
+app = FastAPI(
+    title=settings.app_title,
+    version=settings.app_version,
+    description="Real-time Speech-to-Text API using FastAPI, LiveKit, and Whisper",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(rooms.router)
+app.include_router(transcription.router)
+
+
+@app.get("/", response_model=ApiInfoResponse)
+async def root():
+    """Root endpoint with API information"""
+    return ApiInfoResponse(
+        message="Speech-to-Text API with LiveKit",
+        endpoints={
+            "create_room": "/api/create-room",
+            "generate_token": "/api/token",
+            "start_transcription": "/api/start-transcription",
+            "stop_transcription": "/api/stop-transcription",
+            "health": "/health"
+        }
+    )
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check():
+    """Health check endpoint"""
+    return HealthResponse(
+        status="healthy",
+        whisper_model=settings.whisper_model
+    )
