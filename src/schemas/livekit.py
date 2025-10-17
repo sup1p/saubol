@@ -33,7 +33,6 @@ class TranscriptionResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Response model for health check"""
     status: str
-    whisper_model: str
 
 
 class ApiInfoResponse(BaseModel):

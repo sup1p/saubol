@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     livekit_api_secret: str
     
     # Whisper settings
-    whisper_model: str
     
     # OpenAI settings
     openai_api_key: str

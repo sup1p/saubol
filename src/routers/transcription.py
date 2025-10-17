@@ -1,93 +1,122 @@
 """
 Transcription management API endpoints
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from src.schemas.livekit import TranscriptionResponse
-from src.services.transcription import TranscriptionSession
-from src.core.dependencies import get_active_sessions
+from src.services.transcription import TranscriptionAgentManager
+import logging
 
 router = APIRouter(prefix="/api", tags=["transcription"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/start-transcription", response_model=TranscriptionResponse)
-async def start_transcription(
-    room_name: str,
-    sessions: dict = Depends(get_active_sessions)
-):
+async def start_transcription(room_name: str):
     """
-    Start transcription service for a room.
+    Start transcription agent for a specific room.
     
     Args:
-        room_name: Name of the room to transcribe
-        sessions: Active sessions dependency injection
+        room_name: Name of the LiveKit room to start transcription for
         
     Returns:
         Confirmation of transcription start
     """
     try:
-        # Check if transcription already running for this room
-        if room_name in sessions:
+        # Check if agent already running for this room
+        active_rooms = TranscriptionAgentManager.get_active_rooms()
+        if room_name in active_rooms:
             raise HTTPException(
                 status_code=400,
-                detail=f"Transcription already running for room: {room_name}"
+                detail=f"Transcription agent already running for room: {room_name}"
             )
         
-        # Create and connect transcription session
-        session = TranscriptionSession(room_name)
-        await session.connect()
+        # Start transcription agent for this room
+        success = await TranscriptionAgentManager.start_agent_for_room(room_name)
         
-        # Store session
-        sessions[room_name] = session
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to start transcription agent for room: {room_name}"
+            )
         
+        logger.info(f"Started transcription agent for room: {room_name}")
         return TranscriptionResponse(
-            message="Transcription started",
+            message="Transcription agent started successfully",
             room_name=room_name
         )
     
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error starting transcription: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start transcription: {str(e)}")
+        logger.error(f"Error starting transcription for room {room_name}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to start transcription: {str(e)}"
+        )
 
 
 @router.post("/stop-transcription", response_model=TranscriptionResponse)
-async def stop_transcription(
-    room_name: str,
-    sessions: dict = Depends(get_active_sessions)
-):
+async def stop_transcription(room_name: str):
     """
-    Stop transcription service for a room.
+    Stop transcription agent for a specific room.
     
     Args:
-        room_name: Name of the room to stop transcribing
-        sessions: Active sessions dependency injection
+        room_name: Name of the LiveKit room to stop transcription for
         
     Returns:
         Confirmation of transcription stop
     """
     try:
-        # Check if transcription exists
-        if room_name not in sessions:
+        # Check if agent exists for this room
+        active_rooms = TranscriptionAgentManager.get_active_rooms()
+        if room_name not in active_rooms:
             raise HTTPException(
                 status_code=404,
-                detail=f"No active transcription found for room: {room_name}"
+                detail=f"No active transcription agent found for room: {room_name}"
             )
         
-        # Get and disconnect session
-        session = sessions[room_name]
-        await session.disconnect()
+        # Stop transcription agent for this room
+        success = await TranscriptionAgentManager.stop_agent_for_room(room_name)
         
-        # Remove from active sessions
-        del sessions[room_name]
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to stop transcription agent for room: {room_name}"
+            )
         
+        logger.info(f"Stopped transcription agent for room: {room_name}")
         return TranscriptionResponse(
-            message="Transcription stopped",
+            message="Transcription agent stopped successfully",
             room_name=room_name
         )
     
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error stopping transcription: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to stop transcription: {str(e)}")
+        logger.error(f"Error stopping transcription for room {room_name}: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to stop transcription: {str(e)}"
+        )
+
+
+@router.get("/active-transcriptions")
+async def get_active_transcriptions():
+    """
+    Get list of rooms with active transcription agents.
+    
+    Returns:
+        List of active room names
+    """
+    try:
+        active_rooms = TranscriptionAgentManager.get_active_rooms()
+        return {
+            "message": f"Found {len(active_rooms)} active transcription agents",
+            "active_rooms": active_rooms
+        }
+    except Exception as e:
+        logger.error(f"Error getting active transcriptions: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get active transcriptions: {str(e)}"
+        )

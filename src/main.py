@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.settings import settings
-from src.core.dependencies import active_sessions
 from src.routers import rooms, transcription
 from src.schemas.livekit import ApiInfoResponse, HealthResponse
 
@@ -23,10 +22,15 @@ async def lifespan(app: FastAPI):
     # Startup
     yield
     
-    # Shutdown - cleanup all active transcription sessions
-    print("Shutting down, cleaning up sessions...")
-    for session in active_sessions.values():
-        await session.disconnect()
+    # Shutdown - cleanup all active transcription agents
+    print("Shutting down, cleaning up transcription agents...")
+    from src.services.transcription import TranscriptionAgentManager
+    
+    # Stop all active agents
+    active_rooms = TranscriptionAgentManager.get_active_rooms()
+    for room_name in active_rooms:
+        await TranscriptionAgentManager.stop_agent_for_room(room_name)
+        print(f"Stopped agent for room: {room_name}")
 
 
 app = FastAPI(
@@ -68,6 +72,5 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return HealthResponse(
-        status="healthy",
-        whisper_model=settings.whisper_model
+        status="healthy"
     )

@@ -1,245 +1,343 @@
 """
-Real-time transcription service for LiveKit audio streams
+Real-time transcription service for LiveKit audio streams using LiveKit Agents framework
 """
 from src.core.settings import settings
-
-from typing import Optional
-from livekit import api, rtc
-from scipy import signal
-import soundfile as sf
-from io import BytesIO
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit import agents, rtc
+from livekit.plugins import openai
 from datetime import datetime
-
 import asyncio
-import numpy as np
-import openai
+import logging
+import os
+
+logger = logging.getLogger("transcription-agent")
+
+# Global dictionary to store active agent workers
+active_agents = {}
 
 
-
-class TranscriptionSession:
+class TranscriptionAgentManager:
     """
-    Handles real-time audio transcription for a LiveKit room.
-    Subscribes to audio tracks, buffers audio data, and transcribes using Whisper.
+    Manager for LiveKit Transcription Agents.
+    Handles starting and stopping agents for specific rooms.
     """
     
-    def __init__(self, room_name: str):
+    @staticmethod
+    async def start_agent_for_room(room_name: str) -> bool:
         """
-        Initialize a transcription session for a specific room.
+        Start a transcription agent for a specific room using Worker API.
         
         Args:
-            room_name: Name of the LiveKit room to join
+            room_name: Name of the room to start transcription for
+            
+        Returns:
+            True if agent started successfully, False otherwise
         """
-        self.room_name = room_name
-        self.room = None
-        self.audio_buffer = []
-        self.is_running = False
-        openai.api_key = settings.openai_api_key
-    
-    async def connect(self) -> None:
-        """
-        Connect to LiveKit room and set up event handlers for audio streaming.
-        Creates a transcription agent that subscribes to all audio tracks.
-        """
-        self.room = rtc.Room()
+        if room_name in active_agents:
+            logger.warning(f"Agent already running for room: {room_name}")
+            return False
         
-        @self.room.on("track_subscribed")
+        try:
+            # Set up environment variables for LiveKit Agents
+            os.environ["LIVEKIT_URL"] = settings.livekit_url
+            os.environ["LIVEKIT_API_KEY"] = settings.livekit_api_key
+            os.environ["LIVEKIT_API_SECRET"] = settings.livekit_api_secret
+            os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+            
+            # Create worker task
+            async def run_worker():
+                try:
+                    worker = WorkerOptions(
+                        entrypoint_fnc=create_entrypoint(room_name),
+                        api_key=settings.livekit_api_key,
+                        api_secret=settings.livekit_api_secret,
+                        ws_url=settings.livekit_url,
+                    )
+                    
+                    # Import the worker runner
+                    from livekit.agents import Worker
+                    
+                    # Create and run the worker
+                    w = Worker(worker)
+                    await w.run()
+                    
+                except asyncio.CancelledError:
+                    logger.info(f"Worker cancelled for room: {room_name}")
+                    raise
+                except Exception as e:
+                    logger.error(f"Worker error for room {room_name}: {e}")
+                    if room_name in active_agents:
+                        del active_agents[room_name]
+            
+            task = asyncio.create_task(run_worker())
+            
+            # Store the task
+            active_agents[room_name] = {
+                'task': task
+            }
+            
+            logger.info(f"Started transcription worker for room: {room_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to start agent for room {room_name}: {e}")
+            return False
+    
+    @staticmethod
+    async def stop_agent_for_room(room_name: str) -> bool:
+        """
+        Stop the transcription agent for a specific room.
+        
+        Args:
+            room_name: Name of the room to stop transcription for
+            
+        Returns:
+            True if agent stopped successfully, False otherwise
+        """
+        if room_name not in active_agents:
+            logger.warning(f"No agent running for room: {room_name}")
+            return False
+        
+        try:
+            agent_info = active_agents[room_name]
+            task = agent_info['task']
+            
+            # Stop the agent by canceling the task
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            
+            # Remove from active agents
+            if room_name in active_agents:
+                del active_agents[room_name]
+            
+            logger.info(f"Stopped transcription agent for room: {room_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to stop agent for room {room_name}: {e}")
+            return False
+    
+    @staticmethod
+    def get_active_rooms() -> list:
+        """Get list of rooms with active transcription agents."""
+        return list(active_agents.keys())
+
+
+def create_entrypoint(target_room: str):
+    """
+    Create a room-specific entrypoint function.
+    
+    Args:
+        target_room: The specific room this agent should handle
+        
+    Returns:
+        Entrypoint function for the worker
+    """
+    async def entrypoint(ctx: JobContext):
+        """
+        Room-specific entrypoint that only processes if the context room matches target room.
+        """
+        # Only process if this is the target room
+        if ctx.room.name != target_room:
+            logger.info(f"Agent for room '{target_room}' ignoring job for room '{ctx.room.name}'")
+            return
+        
+        logger.info(f"Agent starting transcription for room: {target_room}")
+        
+        # Create transcription agent instance
+        agent = TranscriptionAgent()
+        
+        # Start the transcription process
+        await agent.start_transcription(ctx)
+    
+    return entrypoint
+
+
+class TranscriptionAgent:
+    """
+    LiveKit Agent for real-time audio transcription using OpenAI Whisper.
+    Uses the official LiveKit Agents framework with OpenAI STT plugin.
+    """
+    
+    def __init__(self):
+        """Initialize the transcription agent."""
+        pass
+    
+    async def start_transcription(self, ctx: JobContext) -> None:
+        """
+        Main entrypoint for the transcription agent.
+        Uses LiveKit Agents framework to handle audio streams.
+        
+        Args:
+            ctx: Job context from LiveKit Worker API
+        """
+        await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+        room = ctx.room
+        
+        logger.info(f"Agent connected to room: {room.name}")
+        logger.info(f"Room participants count: {len(room.remote_participants)}")
+        
+        # Create STT instance - it will use the http session from job context
+        stt = openai.STT(
+            model="whisper-1",
+            language="en",
+        )
+        
+        # Dictionary to store active transcription tasks
+        transcription_tasks = {}
+        
+        async def transcribe_track(track: rtc.Track, participant: rtc.RemoteParticipant):
+            """Transcribe audio from a specific track"""
+            logger.info(f"Starting transcription for track from participant: {participant.identity}")
+            
+            try:
+                # Create audio stream from track
+                audio_stream = rtc.AudioStream(track)
+                stt_stream = stt.stream()
+                
+                # Start processing audio frames
+                async def process_audio():
+                    try:
+                        async for event in audio_stream:
+                            stt_stream.push_frame(event.frame)
+                    except Exception as e:
+                        logger.error(f"Error processing audio frames: {e}")
+                        raise
+                
+                # Handle transcription results
+                async def handle_transcription():
+                    try:
+                        async for event in stt_stream:
+                            if event.type == agents.stt.SpeechEventType.FINAL_TRANSCRIPT:
+                                text = event.alternatives[0].text if event.alternatives else ""
+                                if text.strip():
+                                    timestamp = datetime.now().strftime('%H:%M:%S')
+                                    message = f"[{timestamp}] {participant.identity}: {text}"
+                                    
+                                    logger.info(f"Transcription: {text}")
+                                    
+                                    # Send transcription to the room
+                                    await room.local_participant.publish_data(
+                                        message.encode('utf-8'), 
+                                        topic="transcription"
+                                    )
+                                    await room.local_participant.send_text(
+                                        message, 
+                                        topic="lk.chat"
+                                    )
+                                    
+                                    print(f"Sent transcription message: {message}")
+                    except Exception as e:
+                        logger.error(f"Error handling transcription: {e}")
+                        raise
+                
+                # Run both tasks concurrently
+                await asyncio.gather(
+                    process_audio(),
+                    handle_transcription(),
+                    return_exceptions=True
+                )
+                
+            except Exception as e:
+                logger.error(f"Transcription error for {participant.identity}: {e}")
+            finally:
+                # Close the STT stream
+                await stt_stream.aclose()
+        
+        # Handle track subscriptions
+        @room.on("track_subscribed")
         def on_track_subscribed(
             track: rtc.Track,
             publication: rtc.RemoteTrackPublication,
-            participant: rtc.RemoteParticipant
+            participant: rtc.RemoteParticipant,
         ):
-            """Handle new audio track subscription"""
             if track.kind == rtc.TrackKind.KIND_AUDIO:
-                print(f"Subscribed to audio track from {participant.identity}")
-                asyncio.create_task(self.process_audio_track(track))
+                logger.info(f"Subscribed to audio track from {participant.identity}")
+                
+                # Start transcription for this track
+                task_key = f"{participant.sid}_{track.sid}"
+                transcription_tasks[task_key] = asyncio.create_task(
+                    transcribe_track(track, participant)
+                )
         
-        @self.room.on("participant_connected")
+        # Handle track unsubscriptions
+        @room.on("track_unsubscribed")
+        def on_track_unsubscribed(
+            track: rtc.Track,
+            publication: rtc.RemoteTrackPublication,
+            participant: rtc.RemoteParticipant,
+        ):
+            if track.kind == rtc.TrackKind.KIND_AUDIO:
+                logger.info(f"Unsubscribed from audio track from {participant.identity}")
+                
+                # Cancel transcription task for this track
+                task_key = f"{participant.sid}_{track.sid}"
+                if task_key in transcription_tasks:
+                    transcription_tasks[task_key].cancel()
+                    del transcription_tasks[task_key]
+        
+        # Handle participant connections
+        @room.on("participant_connected")
         def on_participant_connected(participant: rtc.RemoteParticipant):
-            """Handle participant connection"""
-            print(f"Participant connected: {participant.identity}")
-            print(f"Participant has {len(participant.audioTracks)} audio tracks")
+            logger.info(f"New participant connected: {participant.identity}")
         
-        @self.room.on("track_published")
-        def on_track_published(publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
-            """Handle track publication"""
-            print(f"Track published: {publication.sid} by {participant.identity}, kind: {publication.kind}")
-        
-        # Generate token for transcription agent
-        token = api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
-        token.with_identity("transcription-agent")
-        token.with_grants(
-            api.VideoGrants(
-                room_join=True,
-                room=self.room_name,
-                can_subscribe=True
-            )
-        )
-        
-        # Connect to room
-        await self.room.connect(settings.livekit_url, token.to_jwt())
-        self.is_running = True
-        print(f"Connected to room: {self.room_name}")
-    
-    async def process_audio_track(self, track: rtc.AudioTrack) -> None:
-        """
-        Process incoming audio stream from a track.
-        Buffers audio frames and triggers transcription periodically.
-        
-        Args:
-            track: The audio track to process
-        """
-        print(f"Starting to process audio track: {track.sid}")
-        audio_stream = rtc.AudioStream(track)
-        frame_count = 0
-        
-        async for frame in audio_stream:
-            if not self.is_running:
-                print("Audio processing stopped - session not running")
-                break
+        # Handle participant disconnections
+        @room.on("participant_disconnected")
+        def on_participant_disconnected(participant: rtc.RemoteParticipant):
+            logger.info(f"Participant disconnected: {participant.identity}")
             
-            # Append frame to buffer
-            self.audio_buffer.append(frame)
-            frame_count += 1
+            # Cancel all transcription tasks for this participant
+            to_cancel = []
+            for task_key in transcription_tasks:
+                if task_key.startswith(participant.sid):
+                    to_cancel.append(task_key)
             
-            # Log every 10 frames to show audio is being received
-            
-            # Process buffer when we have approximately 10 seconds of audio
-            # (500 frames at 50 frames/sec)
-            if len(self.audio_buffer) >= 500:
-                print(f"Buffer full ({len(self.audio_buffer)} frames), starting transcription...")
-                await self.transcribe_buffer()
-    
-    async def transcribe_buffer(self) -> None:
-        """
-        Transcribe accumulated audio buffer using OpenAI Whisper API.
-        Converts audio frames to numpy array and sends to OpenAI API.
-        """
-        if not self.audio_buffer:
-            return
+            for task_key in to_cancel:
+                transcription_tasks[task_key].cancel()
+                del transcription_tasks[task_key]
         
+        # Process existing participants and their tracks
+        for participant in room.remote_participants.values():
+            logger.info(f"Found existing participant: {participant.identity}")
+            for publication in participant.track_publications.values():
+                if publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
+                    logger.info(f"Found existing audio track from {participant.identity}")
+                    task_key = f"{participant.sid}_{publication.track.sid}"
+                    transcription_tasks[task_key] = asyncio.create_task(
+                        transcribe_track(publication.track, participant)
+                    )
+        
+        # Keep the agent running
+        logger.info("Transcription agent is ready and waiting for audio...")
         try:
-            # Convert frames to numpy array
-            audio_data = self.frames_to_numpy(self.audio_buffer)
-            
-            print(f"OPENAI_API_KEY present: {bool(settings.openai_api_key)}")
-            
-            # Use OpenAI Whisper API
-            print("Sending audio to OpenAI Whisper API...")
-            
-            # Prepare a temporary WAV file from numpy array
-            buf = BytesIO()
-            # Write as 16-bit PCM wav at 16kHz
-            sf.write(buf, audio_data, 16000, format='WAV', subtype='PCM_16')
-            buf.seek(0)
-            print(f"Created WAV buffer of {buf.tell()} bytes")
+            # Wait indefinitely until cancelled
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            logger.info("Transcription agent cancelled, cleaning up...")
+            # Cancel all transcription tasks
+            for task in transcription_tasks.values():
+                task.cancel()
+            raise
 
-            # Use OpenAI SDK
-            buf.name = "audio.wav"  # Give it a filename for OpenAI SDK
-            transcript = openai.audio.transcriptions.create(
-                model="whisper-1",
-                file=buf,
-                language="en"
-            )
-            
-            text = transcript.text.strip()
-            print(f"OpenAI transcription successful: '{text}'")
-            
-            if not text:
-                print("Empty transcription result - audio might be too quiet or unclear")
-                self.audio_buffer = []
-                return
-            
-            if text:
-                print(f"FINAL TRANSCRIPTION: {text}")
-                # Send transcription back to room via data channel
-                try:
-                    # Create data payload with timestamp
-                    timestamp = datetime.now().strftime('%H:%M:%S')
-                    message_with_timestamp = f"[{timestamp}] {text}"
-                    
-                    # For publish_data, we need bytes
-                    data_payload_publishing = message_with_timestamp.encode('utf-8')
-                    print(f"Sending data payload: {data_payload_publishing} (length: {len(data_payload_publishing)})")
 
-                    # Send to all participants in the room
-                    await self.room.local_participant.publish_data(data_payload_publishing, topic="transcription")
-                    
-                    # For send_text, we need string (not bytes)
-                    await self.room.local_participant.send_text(message_with_timestamp, topic="lk.chat")
-                    print(f"Data sent to room successfully: {text}")
-                except Exception as e:
-                    print(f"Failed to send transcription to room: {e}")
-                    import traceback
-                    traceback.print_exc()
-            
-            # Clear buffer
-            self.audio_buffer = []
-            print("Buffer cleared")
-        
-        except Exception as e:
-            print(f"Transcription error: {e}")
-            self.audio_buffer = []
+# Default entrypoint for running the agent standalone
+async def entrypoint(ctx: JobContext):
+    """
+    Main entrypoint for the LiveKit Agent.
+    This function is called when the agent connects to a room.
+    """
+    logger.info(f"Agent starting for room: {ctx.room.name}")
     
-    def frames_to_numpy(self, frames) -> np.ndarray:
-        """
-        Convert audio frames to numpy array for Whisper processing.
-        
-        Args:
-            frames: List of audio frames from LiveKit
-            
-        Returns:
-            Normalized float32 numpy array suitable for Whisper
-        """
-        print(f"Processing {len(frames)} frames")
-        
-        # Extract audio data from frames
-        audio_chunks = []
-        for frame in frames:
-            # Try different frame structures that LiveKit might use
-            audio_data = None
-            if hasattr(frame, 'data'):
-                audio_data = frame.data
-            elif hasattr(frame, 'frame') and hasattr(frame.frame, 'data'):
-                audio_data = frame.frame.data
-            else:
-                print(f"Unexpected frame structure: {type(frame)}, attrs: {dir(frame)}")
-                continue
-            
-            if audio_data:
-                audio_chunks.append(audio_data)
-            else:
-                print(f"No audio data in frame: {frame}")
-                continue
-        
-        if not audio_chunks:
-            print("No audio data found in frames")
-            return np.array([], dtype=np.float32)
-        
-        # Combine all audio frames
-        audio_data = b''.join(audio_chunks)
-        print(f"Combined audio data: {len(audio_data)} bytes")
-        
-        # Convert to numpy array (16-bit PCM)
-        audio_array = np.frombuffer(audio_data, dtype=np.int16)
-        print(f"Audio array shape: {audio_array.shape}, dtype: {audio_array.dtype}")
-        
-        # Normalize to [-1, 1] range (Whisper expects float32 normalized audio)
-        audio_array = audio_array.astype(np.float32) / 32768.0
-        
-        # Resample from 48kHz to 16kHz for better Whisper compatibility
-        # LiveKit typically provides 48kHz audio
-        target_sample_rate = 16000
-        current_sample_rate = 48000  # LiveKit standard is 48kHz
-        audio_array = signal.resample(audio_array, int(len(audio_array) * target_sample_rate / current_sample_rate))
-        print(f"Resampled audio shape: {audio_array.shape}")
-        
-        return audio_array
+    # Create transcription agent instance
+    agent = TranscriptionAgent()
     
-    async def disconnect(self) -> None:
-        """
-        Disconnect from LiveKit room and cleanup resources.
-        """
-        self.is_running = False
-        if self.room:
-            await self.room.disconnect()
-        print(f"Disconnected from room: {self.room_name}")
+    # Start the transcription process
+    await agent.start_transcription(ctx)
+
+
+# For running as standalone worker
+if __name__ == "__main__":
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
