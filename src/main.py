@@ -58,6 +58,7 @@ async def root():
             "generate_token": "/api/token",
             "start_transcription": "/api/start-transcription",
             "stop_transcription": "/api/stop-transcription",
+            "start_agent": "/api/start-agent",
             "health": "/health"
         }
     )

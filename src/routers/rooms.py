@@ -6,6 +6,7 @@ from src.schemas.livekit import RoomCreationResponse, TokenResponse, RoomRequest
 from src.utils.auth import create_room, generate_access_token
 from src.utils.room import list_rooms
 from src.core.settings import settings
+from src.services.new_transcription import start_agent
 
 router = APIRouter(prefix="/api", tags=["rooms"])
 

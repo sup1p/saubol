@@ -154,13 +154,18 @@ class TranscriptionSession:
                 # Send transcription back to room via data channel
                 try:
                     # Create data payload with timestamp
+                    timestamp = datetime.now().strftime('%H:%M:%S')
+                    message_with_timestamp = f"[{timestamp}] {text}"
                     
-                    data_payload = f"[{datetime.now().strftime('%H:%M:%S')}] {text}".encode('utf-8')
-                    print(f"Sending data payload: {data_payload} (length: {len(data_payload)})")
-                    
+                    # For publish_data, we need bytes
+                    data_payload_publishing = message_with_timestamp.encode('utf-8')
+                    print(f"Sending data payload: {data_payload_publishing} (length: {len(data_payload_publishing)})")
+
                     # Send to all participants in the room
-                    await self.room.local_participant.publish_data(data_payload, topic="transcription")
-                    await self.room.local_participant.send_text(data_payload, topic="lk.chat")
+                    await self.room.local_participant.publish_data(data_payload_publishing, topic="transcription")
+                    
+                    # For send_text, we need string (not bytes)
+                    await self.room.local_participant.send_text(message_with_timestamp, topic="lk.chat")
                     print(f"Data sent to room successfully: {text}")
                 except Exception as e:
                     print(f"Failed to send transcription to room: {e}")
