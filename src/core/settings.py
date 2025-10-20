@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # CORS settings
     allowed_origins: list = ["*"]
     
+    
+    livekit_agent_name: str = "transcription-agent"
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
