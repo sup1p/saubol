@@ -1,8 +1,13 @@
 
+from email import header
 import os
 
 
-def create_medical_md(summary_obj, output_dir: str, client: str = "default"):
+def create_medical_md(summary_obj,
+                      output_dir: str, 
+                      client: str = "default",
+                      header_data: dict = None,
+    ):
     
     lines = []
     
@@ -17,16 +22,15 @@ def create_medical_md(summary_obj, output_dir: str, client: str = "default"):
 
     # Секция заголовка
     lines.append("## 1. Заголовок")
-    lines.append(f"- **Дата отчета:** {summary_obj.report_date or '-'}")
-    lines.append(f"- **Полное имя врача:** {summary_obj.doctor_name or '-'}")
-    lines.append(f"- **Должность:** {summary_obj.doctor_position or '-'}")
-    lines.append(f"- **Медицинское учреждение:** {summary_obj.institution or '-'}\n")
+    lines.append(f"- **Дата отчета:** {summary_obj.report_date or header_data.get('report_date', '-') if header_data else '-'}")
+    lines.append(f"- **Полное имя врача:** {summary_obj.doctor_name or header_data.get('doctor_name', '-') if header_data else '-'}")
+    lines.append(f"- **Должность:** {summary_obj.doctor_position or header_data.get('doctor_position', '-') if header_data else '-'}")
+    lines.append(f"- **Медицинское учреждение:** {summary_obj.institution or header_data.get('institution', '-') if header_data else '-'}\n")
 
     # Данные пациента
     lines.append("## 2. Данные пациента")
     lines.append(f"- **Полное имя:** {summary_obj.patient_name or '-'}")
     lines.append(f"- **Возраст / Пол:** {summary_obj.age_sex or '-'}")
-    lines.append(f"- **Дата поступления / посещения:** {summary_obj.admission_date or '-'}")
     lines.append(f"- **Номер медицинской записи:** {summary_obj.record_number or '-'}\n")
 
     # Жалобы

@@ -1,6 +1,9 @@
 import logging
 import sys
 import os
+import asyncio
+from datetime import datetime
+import json
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -37,50 +40,23 @@ class Assistant(Agent):
             You are curious, friendly, and have a sense of humor.""",
         )
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
-
-
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
 async def entrypoint(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
 
-    # Set up a voice AI pipeline using OpenAI, Cartesia, AssemblyAI, and the LiveKit turn detector
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=openai.STT(
             model="gpt-4o-transcribe"
         ),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
         # llm="openai/gpt-4.1-mini",
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
+        
         # tts="cartesia/sonic-2:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
+ 
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         # allow the LLM to generate a response while waiting for the end of turn
@@ -94,49 +70,56 @@ async def entrypoint(ctx: JobContext):
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: UserInputTranscribedEvent) -> None:
         try:
-            # печатать только окончательные фразы; убрать проверку, если нужны промежуточные результаты
-            sid = ctx.job.room.name  # используем тот же идентификатор что и в clean_and_generate_summary
-            sessions.setdefault(sid, [])
-            print(f"[STT] Session ID: {sid}, is_final: {getattr(ev, 'is_final', 'unknown')}")
+            
+            participant = ctx.room.participants.get(ev.participant_sid)
+            participant_name = participant.name if participant else "Unknown"
+
+
+            room_name = ctx.job.room.name
+            sessions.setdefault(room_name, [])
+            print(f"[STT] Session ID: {room_name}, is_final: {getattr(ev, 'is_final', 'unknown')}")
             if getattr(ev, "is_final", False):
-                # ev.transcript — распознанный текст
-                sessions[sid].append(ev.transcript)
-                print(f"[STT final] Added to session {sid}: {ev.transcript}")
-                print(f"[STT] Total messages in session {sid}: {len(sessions[sid])}")
+                sessions[room_name].append(ev.transcript)
+                print(f"[STT final] Added to session {room_name}: {ev.transcript}")
+                print(f"[STT] Total messages in session {room_name}: {len(sessions[room_name])}")
+                asyncio.create_task(send_text_to_channel(f"[Username: {participant_name}] {ev.transcript}", channel="lk.chat"))
             else:
                 print(f"[STT intermediate] {ev.transcript}")
+                asyncio.create_task(send_text_to_channel(f"[STT intermediate] {ev.transcript}", channel="lk.chat"))
         except Exception as e:
             # защита от падения сессии из-за ошибки логирования
             print(f"[STT handler error] {e}")
+            asyncio.create_task(send_text_to_channel(f"[STT handler error] {e}", channel="lk.chat"))
             
-    async def clean_and_generate_summary():
-        sid = ctx.job.room.name  # или другой идентификатор сессии
+    async def summarize_and_generate():
+        room_name = ctx.job.room.name
         print(f"Available sessions: {list(sessions.keys())}")
-        print(f"Looking for session: {sid}")
-        
-        if sid in sessions and sessions[sid]:
-            data = sessions.pop(sid)
-            print(f"Found {len(data)} messages for session {sid}")
-            summary = await generate_summary(data, client=sid)
-            # Здесь можно сохранять summary, логировать, создавать PDF и т.д.
-            print(f"Summary for session {sid}: {summary}")
+        print(f"Looking for session: {room_name}")
+
+        if room_name in sessions and sessions[room_name]:
+            data = sessions.pop(room_name)
+            print(f"Found {len(data)} messages for session {room_name}")
+
+            header_data = {
+                "report_date": datetime.now().strftime("%Y-%m-%d"),
+                "doctor_name": "Dr. John Smith",
+                "doctor_position": "Cardiologist",
+                "institution": "City Hospital"
+            }
+
+            summary = await generate_summary(data, client=room_name, header_data=header_data)
+            print(f"Summary for session {room_name}: {summary}")
         else:
-            print(f"No data found for session {sid} or session is empty")
+            print(f"No data found for session {room_name} or session is empty")
 
-    ctx.add_shutdown_callback(clean_and_generate_summary)
-
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
-
-    # Metrics collection, to measure pipeline performance
-    # For more information, see https://docs.livekit.io/agents/build/metrics/
+    ctx.add_shutdown_callback(summarize_and_generate)
+    
+    async def send_text_to_channel(message: str, channel: str):
+        await ctx.room.local_participant.send_text(
+            message,
+            topic=channel
+        )
+    
     usage_collector = metrics.UsageCollector()
 
     @session.on("metrics_collected")
@@ -149,16 +132,6 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Usage: {summary}")
 
     ctx.add_shutdown_callback(log_usage)
-    
-    
-
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(

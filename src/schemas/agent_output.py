@@ -3,10 +3,6 @@ from pydantic import BaseModel
 
 
 class PDFSummary(BaseModel):
-    report_date: str | None = None
-    doctor_name: str | None = None
-    doctor_position: str | None = None
-    institution: str | None = None
     patient_name: str | None = None
     age_sex: str | None = None
     admission_date: str | None = None
