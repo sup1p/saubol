@@ -32,20 +32,17 @@ WORKDIR /app
 
 # Copy just the dependency files first, for more efficient layer caching
 COPY pyproject.toml uv.lock ./
-RUN mkdir -p src
+RUN mkdir -p src output
 
 # python dependencies using UV's lock file
 RUN uv sync --locked
 
 COPY . .
 
-RUN chown -R appuser:appuser /app
+# Create output directory and set proper permissions
+RUN mkdir -p output && chown -R appuser:appuser /app
 
 USER appuser
 
 EXPOSE 8000
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD uv run python -c "import requests; requests.get('http://localhost:8000/health')"
-
 CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

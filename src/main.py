@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown - cleanup all active transcription agents
     print("Shutting down, cleaning up transcription agents...")
-    from src.services.transcription import TranscriptionAgentManager
+    from src.agents.transcription import TranscriptionAgentManager
     
     # Stop all active agents
     active_rooms = TranscriptionAgentManager.get_active_rooms()

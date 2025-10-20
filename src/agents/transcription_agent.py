@@ -1,4 +1,11 @@
 import logging
+import sys
+import os
+
+# Add the project root to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from src.services.one_user_pipeline import generate_summary
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -81,17 +88,42 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
     
+    # store session transcripts for summary
+    sessions: dict[str, list[str]] = {} 
     
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: UserInputTranscribedEvent) -> None:
         try:
             # печатать только окончательные фразы; убрать проверку, если нужны промежуточные результаты
+            sid = ctx.job.room.name  # используем тот же идентификатор что и в clean_and_generate_summary
+            sessions.setdefault(sid, [])
+            print(f"[STT] Session ID: {sid}, is_final: {getattr(ev, 'is_final', 'unknown')}")
             if getattr(ev, "is_final", False):
                 # ev.transcript — распознанный текст
-                print(f"[STT final] {ev.transcript}")
+                sessions[sid].append(ev.transcript)
+                print(f"[STT final] Added to session {sid}: {ev.transcript}")
+                print(f"[STT] Total messages in session {sid}: {len(sessions[sid])}")
+            else:
+                print(f"[STT intermediate] {ev.transcript}")
         except Exception as e:
             # защита от падения сессии из-за ошибки логирования
             print(f"[STT handler error] {e}")
+            
+    async def clean_and_generate_summary():
+        sid = ctx.job.room.name  # или другой идентификатор сессии
+        print(f"Available sessions: {list(sessions.keys())}")
+        print(f"Looking for session: {sid}")
+        
+        if sid in sessions and sessions[sid]:
+            data = sessions.pop(sid)
+            print(f"Found {len(data)} messages for session {sid}")
+            summary = await generate_summary(data, client=sid)
+            # Здесь можно сохранять summary, логировать, создавать PDF и т.д.
+            print(f"Summary for session {sid}: {summary}")
+        else:
+            print(f"No data found for session {sid} or session is empty")
+
+    ctx.add_shutdown_callback(clean_and_generate_summary)
 
     # To use a realtime model instead of a voice pipeline, use the following session setup instead.
     # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
@@ -117,6 +149,8 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Usage: {summary}")
 
     ctx.add_shutdown_callback(log_usage)
+    
+    
 
     # # Add a virtual avatar to the session, if desired
     # # For other providers, see https://docs.livekit.io/agents/models/avatar/
@@ -141,4 +175,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, drain_timeout=5))
