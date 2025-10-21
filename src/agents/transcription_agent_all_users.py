@@ -73,17 +73,23 @@ async def entrypoint(ctx: JobContext):
                 sessions[room_name].append(ev.transcript)
                 print(f"[STT final] Added to session {room_name}: {ev.transcript}")
                 print(f"[STT] Total messages in session {room_name}: {len(sessions[room_name])}")
-                asyncio.create_task(send_text_to_channel(f"[Username: {participant_name}] {ev.transcript}", channel="lk.chat"))
+                asyncio.create_task(send_text_to_chat(f"[Username: {participant_name}] {ev.transcript}"))
+                asyncio.create_task(send_text_to_channel(f"[Username: {participant_name}] {ev.transcript}", channel="transcription"))
             else:
                 print(f"[STT intermediate] {ev.transcript}")
-                asyncio.create_task(send_text_to_channel(f"[STT intermediate] {ev.transcript}", channel="lk.chat"))
+                asyncio.create_task(send_text_to_chat(f"[STT intermediate] {ev.transcript}"))
+                asyncio.create_task(send_text_to_channel(f"[STT intermediate] {participant_name}] {ev.transcript}", channel="transcription"))
         except Exception as e:
             print(f"[STT handler error] {e}")
-            asyncio.create_task(send_text_to_channel(f"[STT handler error] {e}", channel="lk.chat"))
+            asyncio.create_task(send_text_to_chat(f"[STT handler error] {e}"))
+            asyncio.create_task(send_text_to_channel(f"[STT handler error] {e}", channel="transcription"))
 
 
+    async def send_text_to_chat(message: str):
+        await ctx.room.local_participant.send_text(message, topic="lk.chat")
+                
     async def send_text_to_channel(message: str, channel: str):
-        await ctx.room.local_participant.send_text(message, topic=channel)
+        await ctx.room.local_participant.publish_data(message.encode('utf-8'), topic=channel)
 
     usage_collector = metrics.UsageCollector()
 
@@ -220,7 +226,8 @@ async def entrypoint(ctx: JobContext):
 
                         if is_final:
                             print(f"[TRANSCR FINAL] {identity}: {text}")
-                            asyncio.create_task(send_text_to_channel(f"[{identity}] {text}", channel="lk.chat"))
+                            asyncio.create_task(send_text_to_chat(f"[{identity}] {text}"))
+                            asyncio.create_task(send_text_to_channel(f"[{identity}] {text}", channel="transcription"))
                         else:
                             print(f"[TRANSCR PART] {identity}: {text}")
                 except asyncio.CancelledError:
