@@ -97,6 +97,29 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Usage: {summary}")
 
     ctx.add_shutdown_callback(log_usage)
+    
+    async def summarize_and_generate():
+        room_name = ctx.job.room.name
+        print(f"Available sessions: {list(sessions.keys())}")
+        print(f"Looking for session: {room_name}")
+
+        if room_name in sessions and sessions[room_name]:
+            data = sessions.pop(room_name)
+            print(f"Found {len(data)} messages for session {room_name}")
+
+            header_data = {
+                "report_date": datetime.now().strftime("%Y-%m-%d"),
+                "doctor_name": "Dr. John Smith",
+                "doctor_position": "Cardiologist",
+                "institution": "City Hospital"
+            }
+
+            summary = await generate_summary(data, client=room_name, header_data=header_data)
+            print(f"Summary for session {room_name}: {summary}")
+        else:
+            print(f"No data found for session {room_name} or session is empty")
+            
+    ctx.add_shutdown_callback(summarize_and_generate)
 
     # start agent session
     await session.start(

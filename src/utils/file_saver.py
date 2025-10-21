@@ -22,10 +22,10 @@ def create_medical_md(summary_obj,
 
     # Секция заголовка
     lines.append("## 1. Заголовок")
-    lines.append(f"- **Дата отчета:** {summary_obj.report_date or header_data.get('report_date', '-') if header_data else '-'}")
-    lines.append(f"- **Полное имя врача:** {summary_obj.doctor_name or header_data.get('doctor_name', '-') if header_data else '-'}")
-    lines.append(f"- **Должность:** {summary_obj.doctor_position or header_data.get('doctor_position', '-') if header_data else '-'}")
-    lines.append(f"- **Медицинское учреждение:** {summary_obj.institution or header_data.get('institution', '-') if header_data else '-'}\n")
+    lines.append(f"- **Дата отчета:** {header_data.get('report_date', '-') if header_data else '-'}")
+    lines.append(f"- **Полное имя врача:** {header_data.get('doctor_name', '-') if header_data else '-'}")
+    lines.append(f"- **Должность:** {header_data.get('doctor_position', '-') if header_data else '-'}")
+    lines.append(f"- **Медицинское учреждение:** {header_data.get('institution', '-') if header_data else '-'}\n")
 
     # Данные пациента
     lines.append("## 2. Данные пациента")
