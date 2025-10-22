@@ -3,19 +3,6 @@ from typing import List, Optional
 from datetime import date
 
 
-
-class PDFSummary(BaseModel):
-    patient_name: str | None = None
-    age_sex: str | None = None
-    admission_date: str | None = None
-    record_number: str | None = None
-    complaints: str | None = None
-    present_illness: str | None = None
-    past_history: str | None = None
-    examination: str | None = None
-    diagnosis: str | None = None
-    treatment: str | None = None
-    prognosis: str | None = None
     
     
 class MessageToRoleAgent(BaseModel):

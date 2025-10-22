@@ -11,7 +11,7 @@ Requirements:
 - Preserve original language and original meaning; do NOT add, invent or modify content.
 - Keep outputs concise and readable.
 - If ambiguous, infer speaker from CONTEXT, tone, or medical phrasing.
-- OUTPUT FORMAT: return a JSON array of one or more objects, each: {"speaker":"DOCTOR" or "PATIENT","text":"..."}.
+- OUTPUT FORMAT: return a JSON array of one or more objects, each: {"role":"DOCTOR" or "PATIENT","content":"..."}.
 - If new message is empty or contains no speech, return an empty JSON array: [].
 - Return JSON only — NO explanatory text, NO markdown, NO extra fields.
 

@@ -1,4 +1,4 @@
-from src.schemas.agent_output import PDFSummary, MessageToRoleAgent, MedicalProtocol
+from src.schemas.agent_output import MessageToRoleAgent, MedicalProtocol
 from src.prompts.summary_agent import prompt
 from src.core.settings import settings
 

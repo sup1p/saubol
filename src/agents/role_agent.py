@@ -21,7 +21,9 @@ async def process_transcript(raw_message: str, role_messages: list[MessageToRole
     print(raw_message)
     with open("output/messages.txt", "a", encoding="utf-8") as f:
         f.write(raw_message + "\n")
-        
+    
+    print(f"ADDITIONAL CONTEXT TO LLM: {role_messages}")
+    
     payload = (
         "NEW_MESSAGE:\n" + raw_message + "\n\n" +
         "CONTEXT_JSON:\n" + json.dumps([msg.model_dump() for msg in role_messages], ensure_ascii=False)
