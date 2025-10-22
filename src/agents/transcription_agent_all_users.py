@@ -90,9 +90,21 @@ async def entrypoint(ctx: JobContext):
 
     async def send_text_to_chat(message: str):
         await ctx.room.local_participant.send_text(message, topic="lk.chat")
-                
-    async def send_text_to_channel(message: str, channel: str):
-        await ctx.room.local_participant.publish_data(message.encode('utf-8'), topic=channel)
+
+    async def send_text_to_channel(message: MessageToRoleAgent, channel: str):
+        
+        payload = {
+            "id": f"{ctx.job.id}_{int(datetime.utcnow().timestamp() * 1000)}",
+            "type": "transcription",
+            "source": "agent",
+            "agent": "transcription_agent_all_users",
+            "text": message.content,
+            "from": message.role,
+            "is_final": True,
+            "timestamp": int(datetime.utcnow().timestamp() * 1000),
+        }
+        
+        await ctx.room.local_participant.publish_data(json.dumps(payload).encode("utf-8"), topic=channel)
 
     usage_collector = metrics.UsageCollector()
 
@@ -238,7 +250,7 @@ async def entrypoint(ctx: JobContext):
                             for msg in role_messages:
                                 sessions[room_name].append(MessageToRoleAgent(role=msg.role, content=msg.content))
                                 asyncio.create_task(send_text_to_chat(f"[{msg.role}] {msg.content}"))
-                                asyncio.create_task(send_text_to_channel(f"[{msg.role}] {msg.content}", channel="transcription"))
+                                asyncio.create_task(send_text_to_channel(msg, channel="transcription"))
                         else:
                             print(f"[TRANSCR PART] {identity}: {text}")
                 except asyncio.CancelledError:
