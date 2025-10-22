@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.settings import settings
-from src.routers import rooms
+from src.routers import rooms, document
 from src.schemas.livekit import ApiInfoResponse, HealthResponse
 
 
@@ -49,7 +49,7 @@ app.add_middleware(
 )
 
 app.include_router(rooms.router)
-
+app.include_router(document.router)
 
 @app.get("/", response_model=ApiInfoResponse)
 async def root():

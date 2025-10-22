@@ -1,4 +1,4 @@
-from src.schemas.agent_output import PDFSummary, MessageToRoleAgent
+from src.schemas.agent_output import PDFSummary, MessageToRoleAgent, MedicalProtocol
 from src.prompts.summary_agent import prompt
 from src.core.settings import settings
 
@@ -13,7 +13,7 @@ agent = Agent(
     model=model,
     instructions=prompt,
     retries=3,
-    output_type=PDFSummary,
+    output_type=MedicalProtocol,
     model_settings=ModelSettings(temperature=0.2)
 )
 
