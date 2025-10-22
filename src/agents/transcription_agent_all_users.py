@@ -1,3 +1,4 @@
+from concurrent.futures import process
 import logging
 import sys
 import os
@@ -9,6 +10,8 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.services.one_user_pipeline import generate_summary
+from src.schemas.agent_output import MessageToRoleAgent
+from src.agents.role_agent import process_transcript
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -55,34 +58,34 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    sessions: dict[str, list[str]] = {}
+    sessions: dict[str, list[MessageToRoleAgent]] = {}
 
-    @session.on("user_input_transcribed")
-    def _on_user_input_transcribed(ev: UserInputTranscribedEvent) -> None:
-        try:
-            participant = next(
-                (p for p in ctx.room.remote_participants.values() if getattr(p, "sid", None) == getattr(ev, "participant_sid", None)),
-                None
-            )
-            participant_name = getattr(participant, "name", None) or getattr(participant, "identity", None) or "Unknown"
+    # @session.on("user_input_transcribed")
+    # def _on_user_input_transcribed(ev: UserInputTranscribedEvent) -> None:
+    #     try:
+    #         participant = next(
+    #             (p for p in ctx.room.remote_participants.values() if getattr(p, "sid", None) == getattr(ev, "participant_sid", None)),
+    #             None
+    #         )
+    #         participant_name = getattr(participant, "name", None) or getattr(participant, "identity", None) or "Unknown"
 
-            room_name = ctx.job.room.name
-            sessions.setdefault(room_name, [])
-            print(f"[STT] Session ID: {room_name}, is_final: {getattr(ev, 'is_final', 'unknown')}")
-            if getattr(ev, "is_final", False):
-                sessions[room_name].append(ev.transcript)
-                print(f"[STT final] Added to session {room_name}: {ev.transcript}")
-                print(f"[STT] Total messages in session {room_name}: {len(sessions[room_name])}")
-                asyncio.create_task(send_text_to_chat(f"[Username: {participant_name}] {ev.transcript}"))
-                asyncio.create_task(send_text_to_channel(f"[Username: {participant_name}] {ev.transcript}", channel="transcription"))
-            else:
-                print(f"[STT intermediate] {ev.transcript}")
-                asyncio.create_task(send_text_to_chat(f"[STT intermediate] {ev.transcript}"))
-                asyncio.create_task(send_text_to_channel(f"[STT intermediate] {participant_name}] {ev.transcript}", channel="transcription"))
-        except Exception as e:
-            print(f"[STT handler error] {e}")
-            asyncio.create_task(send_text_to_chat(f"[STT handler error] {e}"))
-            asyncio.create_task(send_text_to_channel(f"[STT handler error] {e}", channel="transcription"))
+    #         room_name = ctx.job.room.name
+    #         sessions.setdefault(room_name, [])
+    #         print(f"[STT] Session ID: {room_name}, is_final: {getattr(ev, 'is_final', 'unknown')}")
+    #         if getattr(ev, "is_final", False):
+    #             sessions[room_name].append(ev.transcript)
+    #             print(f"[STT final] Added to session {room_name}: {ev.transcript}")
+    #             print(f"[STT] Total messages in session {room_name}: {len(sessions[room_name])}")
+    #             # asyncio.create_task(send_text_to_chat(f"[Username: {participant_name}] {ev.transcript}"))
+    #             # asyncio.create_task(send_text_to_channel(f"[Username: {participant_name}] {ev.transcript}", channel="transcription"))
+    #         else:
+    #             print(f"[STT intermediate] {ev.transcript}")
+    #             asyncio.create_task(send_text_to_chat(f"[STT intermediate] {ev.transcript}"))
+    #             asyncio.create_task(send_text_to_channel(f"[STT intermediate] {participant_name}] {ev.transcript}", channel="transcription"))
+    #     except Exception as e:
+    #         print(f"[STT handler error] {e}")
+    #         asyncio.create_task(send_text_to_chat(f"[STT handler error] {e}"))
+    #         asyncio.create_task(send_text_to_channel(f"[STT handler error] {e}", channel="transcription"))
 
 
     async def send_text_to_chat(message: str):
@@ -211,6 +214,10 @@ async def entrypoint(ctx: JobContext):
 
             async def _consume_stt():
                 try:
+                    
+                    room_name = ctx.job.room.name
+                    sessions.setdefault(room_name, [])
+
                     async for ev in stt_stream:
                         etype = getattr(ev, "type", None)
                         is_final = getattr(ev, "is_final", None)
@@ -226,8 +233,12 @@ async def entrypoint(ctx: JobContext):
 
                         if is_final:
                             print(f"[TRANSCR FINAL] {identity}: {text}")
-                            asyncio.create_task(send_text_to_chat(f"[{identity}] {text}"))
-                            asyncio.create_task(send_text_to_channel(f"[{identity}] {text}", channel="transcription"))
+                            
+                            role_messages = await process_transcript(text, sessions[room_name][-10:])
+                            for msg in role_messages:
+                                sessions[room_name].append(MessageToRoleAgent(role=msg.role, content=msg.content))
+                                asyncio.create_task(send_text_to_chat(f"[{msg.role}] {msg.content}"))
+                                asyncio.create_task(send_text_to_channel(f"[{msg.role}] {msg.content}", channel="transcription"))
                         else:
                             print(f"[TRANSCR PART] {identity}: {text}")
                 except asyncio.CancelledError:
@@ -287,6 +298,26 @@ async def entrypoint(ctx: JobContext):
             sid = getattr(publication, "sid", None)
             if sid not in listeners_tasks:
                 listeners_tasks[sid] = asyncio.create_task(_process_publication(publication, participant))
+                
+    @ctx.room.on("disconnected")
+    def _on_room_disconnected():
+        print(f"[INFO] Room {ctx.room.name} disconnected, cleaning up STT streams...")
+
+        async def cleanup():
+            try:
+                for sid, t in list(listeners_tasks.items()):
+                    if not t.done():
+                        t.cancel()
+                listeners_tasks.clear()
+            except Exception as e:
+                logger.warning(f"Cleanup error on room disconnect: {e}")
+
+            try:
+                await session.aclose()
+            except Exception:
+                pass
+
+        asyncio.create_task(cleanup())
 
     # Handle already-present participants on start
     for participant in ctx.room.remote_participants.values():
@@ -311,4 +342,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, drain_timeout=5))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, drain_timeout=1))

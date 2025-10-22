@@ -2,7 +2,7 @@ from src.schemas.agent_output import PDFSummary, MessageToRoleAgent
 from src.prompts.summary_agent import prompt
 from src.core.settings import settings
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 import json
@@ -11,8 +11,10 @@ model = OpenAIChatModel('gpt-4o-mini', provider=OpenAIProvider(api_key=settings.
 
 agent = Agent(
     model=model,
-    system_prompt=prompt,
-    output_type=PDFSummary
+    instructions=prompt,
+    retries=3,
+    output_type=PDFSummary,
+    model_settings=ModelSettings(temperature=0.2)
 )
 
 async def generate_summary_of_transcript_with_roles(transcript: list[MessageToRoleAgent]):

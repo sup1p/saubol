@@ -10,30 +10,6 @@ from src.core.settings import settings
 router = APIRouter(prefix="/api", tags=["rooms"])
 
 
-@router.post("/create-room", response_model=RoomCreationResponse)
-async def create_room_router(room_name: str):
-    """
-    Create a new LiveKit room.
-    
-    Args:
-        room_name: Name for the new room
-        
-    Returns:
-        Room creation confirmation with room details
-    """
-    try:
-        result = await create_room(room_name)
-        return RoomCreationResponse(
-            room_name=result.get("name", room_name),
-            sid=result.get("sid", ""),
-            message="Room created successfully"
-        )
-    
-    except Exception as e:
-        print(f"Error creating room: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create room: {str(e)}")
-
-
 @router.post("/token", response_model=TokenResponse)
 async def generate_token(request: RoomRequest):
     """
@@ -75,26 +51,3 @@ async def list_rooms_router():
     except Exception as e:
         print(f"Error listing rooms: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list rooms: {str(e)}")
-    
-    
-@router.get("/check-room")
-async def check_room_exists(room_name: str):
-    """
-    Check if a room with the given name exists.
-    
-    Args:
-        room_name: Name of the room to check
-        
-    Returns:
-        Existence status of the room
-    """
-    try:
-        rooms_data = await list_rooms()
-        rooms = rooms_data.get("rooms", [])
-        exists = any(room.get("name") == room_name for room in rooms)
-        
-        return {"room_name": room_name, "exists": exists}
-    
-    except Exception as e:
-        print(f"Error checking room existence: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to check room existence: {str(e)}")
