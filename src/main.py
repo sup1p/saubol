@@ -13,31 +13,10 @@ from src.routers import rooms, document
 from src.schemas.livekit import ApiInfoResponse, HealthResponse
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Application lifespan manager.
-    Handles startup and shutdown events.
-    """
-    # Startup
-    yield
-    
-    # Shutdown - cleanup all active transcription agents
-    print("Shutting down, cleaning up transcription agents...")
-    from src.agents.transcription import TranscriptionAgentManager
-    
-    # Stop all active agents
-    active_rooms = TranscriptionAgentManager.get_active_rooms()
-    for room_name in active_rooms:
-        await TranscriptionAgentManager.stop_agent_for_room(room_name)
-        print(f"Stopped agent for room: {room_name}")
-
-
 app = FastAPI(
     title=settings.app_title,
     version=settings.app_version,
-    description="Real-time Speech-to-Text API using FastAPI, LiveKit, and Whisper",
-    lifespan=lifespan
+    description="saubol",
 )
 
 app.add_middleware(

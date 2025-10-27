@@ -52,41 +52,9 @@ async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
 
     session = AgentSession(
-        stt=openai.STT(model="gpt-4o-transcribe"),
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
-        preemptive_generation=True,
     )
 
     sessions: dict[str, list[MessageToRoleAgent]] = {}
-
-    # @session.on("user_input_transcribed")
-    # def _on_user_input_transcribed(ev: UserInputTranscribedEvent) -> None:
-    #     try:
-    #         participant = next(
-    #             (p for p in ctx.room.remote_participants.values() if getattr(p, "sid", None) == getattr(ev, "participant_sid", None)),
-    #             None
-    #         )
-    #         participant_name = getattr(participant, "name", None) or getattr(participant, "identity", None) or "Unknown"
-
-    #         room_name = ctx.job.room.name
-    #         sessions.setdefault(room_name, [])
-    #         print(f"[STT] Session ID: {room_name}, is_final: {getattr(ev, 'is_final', 'unknown')}")
-    #         if getattr(ev, "is_final", False):
-    #             sessions[room_name].append(ev.transcript)
-    #             print(f"[STT final] Added to session {room_name}: {ev.transcript}")
-    #             print(f"[STT] Total messages in session {room_name}: {len(sessions[room_name])}")
-    #             # asyncio.create_task(send_text_to_chat(f"[Username: {participant_name}] {ev.transcript}"))
-    #             # asyncio.create_task(send_text_to_channel(f"[Username: {participant_name}] {ev.transcript}", channel="transcription"))
-    #         else:
-    #             print(f"[STT intermediate] {ev.transcript}")
-    #             asyncio.create_task(send_text_to_chat(f"[STT intermediate] {ev.transcript}"))
-    #             asyncio.create_task(send_text_to_channel(f"[STT intermediate] {participant_name}] {ev.transcript}", channel="transcription"))
-    #     except Exception as e:
-    #         print(f"[STT handler error] {e}")
-    #         asyncio.create_task(send_text_to_chat(f"[STT handler error] {e}"))
-    #         asyncio.create_task(send_text_to_channel(f"[STT handler error] {e}", channel="transcription"))
-
 
     async def send_text_to_chat(message: str):
         await ctx.room.local_participant.send_text(message, topic="lk.chat")
@@ -190,7 +158,7 @@ async def entrypoint(ctx: JobContext):
 
             # per-user VAD + per-user STT stream
             vad_stream = ctx.proc.userdata["vad"].stream()
-            stt_plugin = openai.STT(model="gpt-4o-transcribe")
+            stt_plugin = openai.STT(model="gpt-4o-transcribe", detect_language=True)
             stt_stream = stt_plugin.stream()
 
             async def _forward_input():
